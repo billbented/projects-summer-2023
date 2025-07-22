@@ -1,0 +1,117 @@
+const videoWidth = 600;
+const videoHeight = 500;
+
+let net, knnClassifier;
+let video;
+const NUM_KEYPOINTS = 17;
+
+async function setupCamera() {
+  video = document.getElementById('video');
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: videoWidth, height: videoHeight },
+  });
+  video.srcObject = stream;
+
+  return new Promise((resolve) => {
+    video.onloadedmetadata = () => resolve(video);
+  });
+}
+
+async function loadModels() {
+  net = await posenet.load();
+  knnClassifier = ml5.KNNClassifier();
+}
+
+function getKeypointsVector(keypoints) {
+  // Flatten the x, y coordinates into a 1D array
+  const vector = [];
+  keypoints.forEach((keypoint) => {
+    vector.push(keypoint.position.x / videoWidth); // normalize by width
+    vector.push(keypoint.position.y / videoHeight); // normalize by height
+  });
+  return vector;
+}
+
+// Function to add examples for a specific pose label (triggered by user input)
+function addExample(label, pose) {
+  const vector = getKeypointsVector(pose.keypoints);
+  knnClassifier.addExample(vector, label);
+  console.log(`Added example for ${label}`);
+}
+
+async function classifyPose(pose) {
+  if (knnClassifier.getNumLabels() > 0) {
+    const vector = getKeypointsVector(pose.keypoints);
+    const res = await knnClassifier.classify(vector);
+    return res.label; // predicted pose label
+  }
+  return null;
+}
+
+async function detectAndClassify() {
+  const pose = await net.estimateSinglePose(video, { flipHorizontal: true });
+  const label = await classifyPose(pose);
+
+  // For demo: draw the label on canvas
+  const canvas = document.getElementById('output');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, videoWidth, videoHeight);
+  ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+  drawKeypoints(pose.keypoints, 0.5, ctx);
+  drawSkeleton(pose.keypoints, 0.5, ctx);
+
+  if (label) {
+    ctx.fillStyle = 'red';
+    ctx.font = '32px Arial';
+    ctx.fillText(`Pose: ${label}`, 10, 40);
+  }
+
+  requestAnimationFrame(detectAndClassify);
+}
+
+async function main() {
+  await setupCamera();
+  video.play();
+  await loadModels();
+
+  // Example: hookup UI buttons to add training examples for poses
+  document.getElementById('pose1-btn').onclick = async () => {
+    const pose = await net.estimateSinglePose(video);
+    addExample('Pose1', pose);
+  };
+  document.getElementById('pose2-btn').onclick = async () => {
+    const pose = await net.estimateSinglePose(video);
+    addExample('Pose2', pose);
+  };
+  // Similarly for other poses...
+
+  detectAndClassify();
+}
+
+main();
+
+// Drawing functions (same as previous example)
+function drawKeypoints(keypoints, minConfidence, ctx, scale = 1) {
+  for (let i = 0; i < keypoints.length; i++) {
+    const keypoint = keypoints[i];
+    if (keypoint.score >= minConfidence) {
+      const { y, x } = keypoint.position;
+      ctx.beginPath();
+      ctx.arc(x * scale, y * scale, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = 'aqua';
+      ctx.fill();
+    }
+  }
+}
+
+function drawSkeleton(keypoints, minConfidence, ctx, scale = 1) {
+  const adjacentKeyPoints = posenet.getAdjacentKeyPoints(keypoints, minConfidence);
+  adjacentKeyPoints.forEach((keypointPair) => {
+    ctx.beginPath();
+    ctx.moveTo(keypointPair[0].position.x * scale, keypointPair[0].position.y * scale);
+    ctx.lineTo(keypointPair[1].position.x * scale, keypointPair[1].position.y * scale);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'chartreuse';
+    ctx.stroke();
+  });
+}
